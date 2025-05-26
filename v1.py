@@ -281,3 +281,193 @@ def get_optimizer_nn(net, lr_net, lr_block, lr_classifier, weight_decay=0.0) -> 
     optimizer_net = torch.optim.AdamW(paramlist_net,weight_decay=weight_decay)
     optimizer_classifier = torch.optim.AdamW(paramlist_classifier,weight_decay=weight_decay)
     return optimizer_net, optimizer_classifier, params_to_freeze, params_to_train, params_backbone
+
+"""
+Second debugging batch
+"""
+def align_loss(inputs, targets, EPS=1e-12):
+    """Alignment loss for contrastive learning"""
+    assert inputs.shape == targets.shape
+    assert targets.requires_grad == False
+
+    loss = torch.einsum("nc,nc->n", [inputs, targets])
+    loss = -torch.log(loss + EPS).mean()
+    return loss
+
+def calculate_loss(proto_features, pooled, out, ys,
+                   align_weight, tanh_weight, class_weight, net_normalization_multiplier,
+                   pretrain=False, finetune=False, criterion=nn.NLLLoss(), train_iter=None, print=True, EPS=1e-10):
+    """Calculate combined loss for PIP-Net"""
+    # Split augmented views
+    pooled1, pooled2 = pooled.chunk(2)
+    pf1, pf2 = proto_features.chunk(2)
+
+    # Flatten spatial dimensions
+    embv1 = pf1.flatten(start_dim=2).permute(0, 2, 1).flatten(end_dim=1)
+    embv2 = pf2.flatten(start_dim=2).permute(0, 2, 1).flatten(end_dim=1)
+
+    # Alignment loss
+    a_loss = (align_loss(embv1, embv2.detach()) + align_loss(embv2, embv1.detach())) / 2.
+
+    # Tanh loss for diversity
+    tanh_loss = -(torch.log(torch.tanh(torch.sum(pooled1, dim=0)) + EPS).mean() +
+                  torch.log(torch.tanh(torch.sum(pooled2, dim=0)) + EPS).mean()) / 2.
+
+    """Adapted original loss"""
+    # if not finetune:
+    #     loss = align_weight*a_loss
+    #     loss += tanh_weight * tanh_loss
+    
+    # if not pretrain:
+    #     softmax_inputs = torch.log1p(out**net_normalization_multiplier)
+    #     class_loss = criterion(F.log_softmax((softmax_inputs),dim=1),ys)
+        
+    #     if finetune:
+    #         loss= class_weight * class_loss
+    #     else:
+    #         loss+= class_weight * class_loss
+    
+    # if pretrain:
+    #     acc = 0.0
+    # else:
+    #     ys_combined = torch.cat([ys, ys])
+    #     # Calculate accuracy
+    #     ys_pred = torch.argmax(out, dim=1)
+    #     acc = (ys_pred == ys_combined).float().mean().item()
+    
+    """Below is generated code"""
+    if pretrain:
+        # Only use alignment and tanh loss during pretraining
+        loss = align_weight * a_loss + tanh_weight * tanh_loss
+        acc = 0.0
+    else:
+        # Add classification loss
+        ys_combined = torch.cat([ys, ys])
+        softmax_inputs = torch.log1p(out ** net_normalization_multiplier)
+        class_loss = criterion(F.log_softmax(softmax_inputs, dim=1), ys_combined)
+
+        loss = align_weight * a_loss + tanh_weight * tanh_loss + class_weight * class_loss
+
+        # Calculate accuracy
+        ys_pred = torch.argmax(out, dim=1)
+        acc = (ys_pred == ys_combined).float().mean().item()
+    
+    with torch.no_grad():
+        if pretrain:
+            train_iter.set_postfix_str(
+            f'L: {loss.item():.3f}, LA:{a_loss.item():.2f}, LT:{tanh_loss.item():.3f}, num_scores>0.1:{torch.count_nonzero(torch.relu(pooled-0.1),dim=1).float().mean().item():.1f}',refresh=False)
+        else:
+            if finetune:
+                train_iter.set_postfix_str(
+                f'L:{loss.item():.3f},LC:{class_loss.item():.3f}, LA:{a_loss.item():.2f}, LT:{tanh_loss.item():.3f}, num_scores>0.1:{torch.count_nonzero(torch.relu(pooled-0.1),dim=1).float().mean().item():.1f}, Ac:{acc:.3f}',refresh=False)
+            else:
+                train_iter.set_postfix_str(
+                f'L:{loss.item():.3f},LC:{class_loss.item():.3f}, LA:{a_loss.item():.2f}, LT:{tanh_loss.item():.3f}, num_scores>0.1:{torch.count_nonzero(torch.relu(pooled-0.1),dim=1).float().mean().item():.1f}, Ac:{acc:.3f}',refresh=False)
+
+    return loss, acc
+
+def train_epoch(net, dataloader, optimizer_net, optimizer_classifier,
+                scheduler_net, scheduler_classifier, device, epoch,
+                pretrain=False, finetune=False):
+    """Train for one epoch"""
+    net.train()
+
+    # Configure gradients
+    if pretrain:
+        net._classification.requires_grad = False
+    else:
+        net._classification.requires_grad = True
+
+    criterion = nn.NLLLoss(reduction='mean').to(device)
+
+    total_loss = 0.0
+    total_acc = 0.0
+
+    # Training weights
+    if pretrain:
+        align_weight = (epoch / 10) * 1.0  # Gradually increase
+        tanh_weight = 5.0
+        class_weight = 0.0
+    else:
+        align_weight = 5.0
+        tanh_weight = 2.0
+        class_weight = 2.0
+
+    print(f"{'Pretrain' if pretrain else 'Train'} Epoch {epoch} - "
+          f"Align weight: {align_weight:.2f}, Tanh weight: {tanh_weight:.2f}, "
+          f"Class weight: {class_weight:.2f}")
+
+    progress_bar = tqdm(dataloader, desc=f"{'Pretrain' if pretrain else 'Train'} Epoch {epoch}")
+
+    for i, (xs1, xs2, ys) in enumerate(progress_bar):
+        xs1, xs2, ys = xs1.to(device), xs2.to(device), ys.to(device)
+
+        # Zero gradients
+        optimizer_net.zero_grad()
+        optimizer_classifier.zero_grad()
+
+        # Forward pass
+        xs_combined = torch.cat([xs1, xs2])
+        proto_features, pooled, out = net(xs_combined)
+
+        # Calculate loss
+        loss, acc, align_l, tanh_l = calculate_loss(
+            proto_features, pooled, out, ys,
+            net._classification.normalization_multiplier,
+            pretrain=pretrain, criterion=criterion,
+            align_weight=align_weight, tanh_weight=tanh_weight,
+            class_weight=class_weight
+        )
+
+        # Backward pass
+        loss.backward()
+
+        # Update weights
+        # if not finetune:
+        #     optimizer_net.step()
+        #     if scheduler_net:
+        #         scheduler_net.step()
+
+        # if not pretrain:
+        #     optimizer_classifier.step()
+        #     if scheduler_classifier:
+        #         scheduler_classifier.step(epoch - 1 + (i / len(dataloader)))
+
+        if not pretrain:
+            optimizer_classifier.step()
+            scheduler_classifier.step(epoch - 1 + (i/len(dataloader)))
+
+        if not finetune:
+            optimizer_net.step()
+            scheduler_net.step()
+
+        if not pretrain:
+            # Clamp small weights to zero
+            with torch.no_grad():
+                net._classification.weight.copy_(
+                    torch.clamp(net._classification.weight.data - 1e-3, min=0.)
+                )
+                net._classification.normalization_multiplier.copy_(
+                    torch.clamp(net._classification.normalization_multiplier.data, min=1.0)
+                )
+                if net._classification.bias is not None:
+                    net.module._classification.bias.copy_(
+                        torch.clamp(net._classification.bias.data, min=0.)
+                    )
+
+        # Update metrics
+        total_loss += loss.item()
+        total_acc += acc
+
+        # Update progress bar
+        progress_bar.set_postfix({
+            'loss': f'{loss.item():.3f}',
+            'acc': f'{acc:.3f}' if not pretrain else 'N/A',
+            'align': f'{align_l:.3f}',
+            'tanh': f'{tanh_l:.3f}'
+        })
+
+    avg_loss = total_loss / len(dataloader)
+    avg_acc = total_acc / len(dataloader) if not pretrain else 0.0
+
+    return avg_loss, avg_acc

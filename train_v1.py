@@ -1,22 +1,118 @@
-from pipnet.pipnet import PIPNet, get_network
 from util.log import Log
 import torch.nn as nn
 from util.args import get_args, save_args
-from util.data import get_dataloaders
+
 from util.func import init_weights_xavier
-from pipnet.train import train_pipnet
-from pipnet.test import eval_pipnet, get_thresholds, eval_ood
-from util.eval_cub_csv import eval_prototypes_cub_parts_csv, get_topk_cub, get_proto_patches_cub
+# from pipnet.train import train_pipnet
+from pipnet.test import eval_pipnet
 import torch
 from util.vis_pipnet import visualize, visualize_topk
-from util.visualize_prediction import vis_pred, vis_pred_experiments
 import sys, os
 import random
 import numpy as np
-from shutil import copy
 import matplotlib.pyplot as plt
-from copy import deepcopy
-from v1 import get_cub_dataloaders, create_model, get_optimizer_nn
+from v1 import get_cub_dataloaders, create_model, get_optimizer_nn, calculate_loss
+from tqdm import tqdm
+
+
+"""
+For batch 2 testing
+"""
+def train_pipnet(net, train_loader, optimizer_net, optimizer_classifier, scheduler_net, scheduler_classifier, criterion, epoch, nr_epochs, device, pretrain=False, finetune=False, progress_prefix: str = 'Train Epoch'):
+
+    # Make sure the model is in train mode
+    net.train()
+    
+    if pretrain:
+        # Disable training of classification layer
+        net.module._classification.requires_grad = False
+        progress_prefix = 'Pretrain Epoch'
+    else:
+        # Enable training of classification layer (disabled in case of pretraining)
+        net.module._classification.requires_grad = True
+    
+    # Store info about the procedure
+    train_info = dict()
+    total_loss = 0.
+    total_acc = 0.
+
+    iters = len(train_loader)
+    # Show progress on progress bar. 
+    train_iter = tqdm(enumerate(train_loader),
+                    total=len(train_loader),
+                    desc=progress_prefix+'%s'%epoch,
+                    mininterval=2.,
+                    ncols=0)
+    
+    count_param=0
+    for name, param in net.named_parameters():
+        if param.requires_grad:
+            count_param+=1           
+    print("Number of parameters that require gradient: ", count_param, flush=True)
+
+    if pretrain:
+        align_pf_weight = (epoch/nr_epochs)*1.
+        unif_weight = 0.5 #ignored
+        t_weight = 5.
+        cl_weight = 0.
+    else:
+        align_pf_weight = 5. 
+        t_weight = 2.
+        unif_weight = 0.
+        cl_weight = 2.
+
+    
+    print("Align weight: ", align_pf_weight, ", U_tanh weight: ", t_weight, "Class weight:", cl_weight, flush=True)
+    print("Pretrain?", pretrain, "Finetune?", finetune, flush=True)
+    
+    lrs_net = []
+    lrs_class = []
+    # Iterate through the data set to update leaves, prototypes and network
+    for i, (xs1, xs2, ys) in train_iter:       
+        
+        xs1, xs2, ys = xs1.to(device), xs2.to(device), ys.to(device)
+       
+        # Reset the gradients
+        optimizer_classifier.zero_grad(set_to_none=True)
+        optimizer_net.zero_grad(set_to_none=True)
+       
+        # Perform a forward pass through the network
+        proto_features, pooled, out = net(torch.cat([xs1, xs2]))
+        loss, acc = calculate_loss(proto_features, pooled, out, ys,
+                                   align_pf_weight, t_weight, unif_weight, cl_weight, net_normalization_multiplier=net.module._classification.normalization_multiplier,
+                                   pretrain=pretrain, finetune=finetune, criterion=criterion, train_iter=train_iter, print=True, EPS=1e-8)
+        
+        # Compute the gradient
+        loss.backward()
+
+        if not pretrain:
+            optimizer_classifier.step()   
+            scheduler_classifier.step(epoch - 1 + (i/iters))
+            lrs_class.append(scheduler_classifier.get_last_lr()[0])
+     
+        if not finetune:
+            optimizer_net.step()
+            scheduler_net.step() 
+            lrs_net.append(scheduler_net.get_last_lr()[0])
+        else:
+            lrs_net.append(0.)
+            
+        with torch.no_grad():
+            total_acc+=acc
+            total_loss+=loss.item()
+
+        if not pretrain:
+            with torch.no_grad():
+                net.module._classification.weight.copy_(torch.clamp(net.module._classification.weight.data - 1e-3, min=0.)) #set weights in classification layer < 1e-3 to zero
+                net.module._classification.normalization_multiplier.copy_(torch.clamp(net.module._classification.normalization_multiplier.data, min=1.0)) 
+                if net.module._classification.bias is not None:
+                    net.module._classification.bias.copy_(torch.clamp(net.module._classification.bias.data, min=0.))  
+    train_info['train_accuracy'] = total_acc/float(i+1)
+    train_info['loss'] = total_loss/float(i+1)
+    train_info['lrs_net'] = lrs_net
+    train_info['lrs_class'] = lrs_class
+    
+    return train_info
 
 
 def run_pipnet(args=None):
@@ -154,6 +250,7 @@ def run_pipnet(args=None):
         print("\nPretrain Epoch", epoch, "with batch size", trainloader_pretraining.batch_size, flush=True)
         
         # Pretrain prototypes
+        # TODO: change this
         train_info = train_pipnet(net, trainloader_pretraining, optimizer_net, optimizer_classifier, scheduler_net, None, criterion, epoch, args.epochs_pretrain, device, pretrain=True, finetune=False)
         lrs_pretrain_net+=train_info['lrs_net']
         plt.clf()

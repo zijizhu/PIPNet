@@ -79,7 +79,7 @@ def train_pipnet(net, train_loader, optimizer_net, optimizer_classifier, schedul
         # Perform a forward pass through the network
         proto_features, pooled, out = net(torch.cat([xs1, xs2]))
         loss, acc = calculate_loss(proto_features, pooled, out, ys,
-                                   align_pf_weight, t_weight, unif_weight, cl_weight, net_normalization_multiplier=net.module._classification.normalization_multiplier,
+                                   align_pf_weight, t_weight, cl_weight, net_normalization_multiplier=net.module._classification.normalization_multiplier,
                                    pretrain=pretrain, finetune=finetune, criterion=criterion, train_iter=train_iter, print=True, EPS=1e-8)
         
         # Compute the gradient

@@ -9,7 +9,7 @@ from PIL import Image, ImageDraw
 import torchvision
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader, Dataset
-from tqdm.notebook import tqdm
+from tqdm import tqdm
 import matplotlib.pyplot as plt
 from typing import Tuple, Dict
 import shutil

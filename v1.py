@@ -244,7 +244,7 @@ def get_optimizer_nn(net, lr_net, lr_block, lr_classifier, weight_decay=0.0) -> 
     params_backbone = []
 
     print("chosen network is convnext", flush=True)
-    for name,param in net._net.named_parameters():
+    for name,param in net.module._net.named_parameters():
         if 'features.7.2' in name:
             params_to_train.append(param)
         elif 'features.7' in name or 'features.6' in name:
@@ -260,7 +260,7 @@ def get_optimizer_nn(net, lr_net, lr_block, lr_classifier, weight_decay=0.0) -> 
         print("Network is not ResNet or ConvNext.", flush=True)
     classification_weight = []
     classification_bias = []
-    for name, param in net._classification.named_parameters():
+    for name, param in net.module._classification.named_parameters():
         if 'weight' in name:
             classification_weight.append(param)
         elif 'multiplier' in name:
@@ -270,7 +270,7 @@ def get_optimizer_nn(net, lr_net, lr_block, lr_classifier, weight_decay=0.0) -> 
             {"params": params_backbone, "lr": lr_net, "weight_decay_rate": weight_decay},
             {"params": params_to_freeze, "lr": lr_block, "weight_decay_rate": weight_decay},
             {"params": params_to_train, "lr": lr_block, "weight_decay_rate": weight_decay},
-            {"params": net._add_on.parameters(), "lr": lr_block*10., "weight_decay_rate": weight_decay}]
+            {"params": net.module._add_on.parameters(), "lr": lr_block*10., "weight_decay_rate": weight_decay}]
 
     paramlist_classifier = [
             {"params": classification_weight, "lr": lr_classifier, "weight_decay_rate": weight_decay},

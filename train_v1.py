@@ -64,7 +64,7 @@ def run_pipnet(args=None):
     
     # Obtain the dataset and dataloaders
 
-    trainloader, trainloader_pretraining, testloader, projectloader, classes = get_cub_dataloaders()
+    trainloader, trainloader_pretraining, testloader, projectloader, classes = get_cub_dataloaders(batch_size=args.batch_size, batch_size_pretrain=args.batch_size_pretrain)
     if len(classes)<=20:
         if args.validation_size == 0.:
             print("Classes: ", testloader.dataset.class_to_idx, flush=True)

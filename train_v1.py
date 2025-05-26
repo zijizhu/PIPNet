@@ -79,7 +79,7 @@ def run_pipnet(args=None):
     net = net.to(device=device)
     net = nn.DataParallel(net, device_ids = device_ids)    
     
-    optimizer_net, optimizer_classifier, params_to_freeze, params_to_train, params_backbone = get_optimizer_nn(net, args.lr_net, args.lr_block, args.lr_classifier)  # NOTE: replaced
+    optimizer_net, optimizer_classifier, params_to_freeze, params_to_train, params_backbone = get_optimizer_nn(net, args.lr_net, args.lr_block, args.lr)  # NOTE: replaced
 
 
     # Initialize or load model
@@ -171,7 +171,7 @@ def run_pipnet(args=None):
         
     # SECOND TRAINING PHASE
     # re-initialize optimizers and schedulers for second training phase
-    optimizer_net, optimizer_classifier, params_to_freeze, params_to_train, params_backbone = get_optimizer_nn(net, args.lr_net, args.lr_block, args.lr_classifier)  # NOTE: replaced
+    optimizer_net, optimizer_classifier, params_to_freeze, params_to_train, params_backbone = get_optimizer_nn(net, args.lr_net, args.lr_block, args.lr)  # NOTE: replaced
     scheduler_net = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_net, T_max=len(trainloader)*args.epochs, eta_min=args.lr_net/100.)
     # scheduler for the classification layer is with restarts, such that the model can re-active zeroed-out prototypes. Hence an intuitive choice. 
     if args.epochs<=30:

@@ -25,6 +25,8 @@ def eval_pipnet(net,
     # Build a confusion matrix
     cm = np.zeros((net.module._num_classes, net.module._num_classes), dtype=int)
 
+    corrects, totals = 0, 0
+
     global_top1acc = 0.
     global_top5acc = 0.
     global_sim_anz = 0.
@@ -72,7 +74,10 @@ def eval_pipnet(net,
             acc = acc_from_cm(cm_batch)
             test_iter.set_postfix_str(
                 f'SimANZCC: {correct_class_sim_scores_anz.mean().item():.2f}, ANZ: {almost_nz.mean().item():.1f}, LocS: {local_size.mean().item():.1f}, Acc: {acc:.3f}', refresh=False
-            )    
+            )
+
+            corrects += (ys == torch.argmax(out, dim=1)).sum().item()
+            totals += ys.size(0)
 
             (top1accs, top5accs) = topk_accuracy(out, ys, topk=[1,5])
             
@@ -91,7 +96,8 @@ def eval_pipnet(net,
     print("sparsity ratio: ", (torch.numel(net.module._classification.weight)-torch.count_nonzero(torch.nn.functional.relu(net.module._classification.weight-1e-3)).item()) / torch.numel(net.module._classification.weight), flush=True)
     info['confusion_matrix'] = cm
     info['test_accuracy'] = acc_from_cm(cm)
-    info['top1_accuracy'] = global_top1acc/len(test_loader.dataset)
+    # info['top1_accuracy'] = global_top1acc/len(test_loader.dataset)
+    info['top1_accuracy'] = corrects / totals
     info['top5_accuracy'] = global_top5acc/len(test_loader.dataset)
     info['almost_sim_nonzeros'] = global_sim_anz/len(test_loader.dataset)
     info['local_size_all_classes'] = local_size_total / len(test_loader.dataset)

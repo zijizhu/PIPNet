@@ -72,7 +72,7 @@ def run_pipnet(args=None):
             print("Classes: ", str(classes), flush=True)
     
     # Create a convolutional network based on arguments and add 1x1 conv layer
-    net = create_model(len(classes), args)  # NOTE replaced
+    net = create_model()  # NOTE replaced
 
     num_prototypes = 768
     # Create a PIP-Net
